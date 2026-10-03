@@ -1,7 +1,10 @@
 .*
 !.gitignore
-__pycache__/
 !.python-version
+__pycache__/
 *.csv
 *.bin
+*.parquet
+*.duckdb
+init.sql
 s3.env
