@@ -1,45 +1,44 @@
-# Lab: SQL analytics with DuckDB
+# Lab: SQL analytics with DuckDB - Answers
 
-## 1. Setup
-- Tool: DuckDB CLI v1.5.5, with a persistent S3 secret created by Onyxia
-- Data: `bronze/users.csv` (50 users) and `bronze/orders.csv` (2829 orders) in my bucket `user-e-huang-ece`
-- An `init.sql` file sets a `bucket` variable and the UTC time zone
+## S3 configuration
 
-## 2. What I did
-- **Read CSV on S3**: `read_csv`, `sniff_csv`, `DESCRIBE` and `SUMMARIZE` without loading the file.
-- **Tables**: loaded `users` (50 rows) and `orders` (2829 rows) from 2020-01-01 to 2020-04-27.
-- **Quality checks**: 0 orphan orders, 0 inactive users, 0 duplicated order IDs (ANTI JOIN and GROUP BY).
-- **Analytics**: aggregations by product and month, top 5 customers, age groups, cumulative sum and 7-day moving average, best product per month (`QUALIFY`), and a `PIVOT`.
-- **Exercises**: average orders per user (about 56.6), first/last order per user, best hour, month-over-month change with `lag`, and users who ordered all products (45 of 50).
-- **Parquet**: exported `orders` to Parquet and read the metadata in the footer.
-- **Hive partitioning**: one folder per product. A filter on `product = 'cookie'` read 1 file out of 6.
-- **CSV vs Parquet**: see the table below.
-- **Python**: `orders_report.py` runs a DuckDB query with a query parameter (no SQL injection) and prints monthly orders. Command: `uv run orders-report`.
+**1. What are the risks of a persistent secret in the home directory? Why are they limited on Onyxia?**
+The secret is saved in a file in my home directory. Any program running as my user can read it. It can also leak in a backup. On Onyxia, the risk is small. The credentials are temporary and only give access to my own bucket.
 
-## 3. CSV vs Parquet (my results)
-| | CSV | Parquet |
-|---|---|---|
-| File size | 28.2 MiB | 11 MiB |
-| Data read for `GROUP BY product` | 28.2 MiB | 203.5 KiB |
-| Time for this query | 1.24 s | 0.30 s |
-| Data read with filter `date >= '2100-01-01'` | n/a | 16 KiB |
+**2. How would you restrict the S3 access for a Kubernetes Job?**
+I would give the Job its own identity, for example a service account with a minimal role. The role would allow only what the Job needs, like read-only access to `bronze/`.
 
-The Parquet file has 3 row groups. The filter skips all 3, because the maximum date of each one is before 2100.
+## Query the bronze layer
 
-## 4. Problems and solutions
-- **`InvalidAccessKeyId` in DuckDB**: the S3 secret was created when the service started and the temporary credentials had expired. I restarted the service to get new credentials.
-- **Pasting several queries**: the terminal merged them on one line. I pasted one query at a time.
-- **`s5cmd` not found**: the new service did not have it. I used `aws s3 cp` instead.
-- **Smaller large file**: my file had about 252,000 rows (29 MB), so my numbers are smaller than the numbers in the lab.
+**3. Why does `approx_unique` return 40 and 3167?**
+It is an estimate, not an exact count. DuckDB uses an algorithm that is fast and light, but not exact. The real values are 50 and 2829.
 
-## 5. Answers to the questions
-1. **Risks of a persistent secret in the home directory?** Any process running as my user can read it, and it can leak in backups or a copied folder. On Onyxia the risk is limited because the credentials are temporary and only give access to my own bucket.
-2. **Restrict S3 access for a Kubernetes Job?** Give the Job its own identity (service account with a minimal IAM role) or a dedicated Secret with a read-only access limited to the needed prefix.
-3. **Why 40 and 3167 for `approx_unique`?** It is an estimate (HyperLogLog): fast and light in memory, but not exact. The real values are 50 and 2829.
-4. **Issue with a large file whose first rows are not typical?** DuckDB guesses the types from a sample. It may choose a wrong type (for example integer instead of text) and fail later in the file.
-5. **Why is `uuid` barely compressed?** The IDs are random and all different, so there is no repetition to compress.
-6. **Why are some columns bigger after compression?** On small data, the format overhead is bigger than the gain.
-7. **Why not partition by `uuid`?** It creates one file per order: thousands of tiny files, and each file costs a request on object storage.
-8. **Which partition column for orders growing every day?** The date (for example year and month, or day).
-9. **If orders were shuffled?** Each row group would contain dates from the whole period, so no row group could be skipped.
-10. **CSV vs Parquet time?** Parquet is about 4 times faster. Part of the gap is the network (28 MiB vs 200 KiB), part is CSV parsing (text converted row by row, while Parquet columns are typed and compressed).
+**4. Which issue may occur with a large file whose first rows are not representative?**
+DuckDB guesses the types from a sample of the file. If the sample is not typical, it can choose a wrong type. The query then fails later in the file.
+
+## Parquet export
+
+**5. Why is the `uuid` column barely compressed?**
+The identifiers are random and all different. There is no repetition, so the compression cannot reduce the size.
+
+**6. Why is the compressed size of some columns larger than the uncompressed size?**
+The data is very small. The compression adds a small overhead. When the data has no pattern, the overhead is bigger than the gain.
+
+## Hive partitioning
+
+**7. Why is partitioning by `uuid` a bad idea?**
+Each `uuid` is unique. We would get one file per order, so thousands of tiny files. On object storage, each file needs a request, and requests are slow. The queries would be very slow.
+
+**8. Which partition column for orders growing every day?**
+I would choose the date, for example year and month. New data goes into new partitions. Most queries filter on a period, so DuckDB can skip the other partitions.
+
+## CSV vs. Parquet at scale
+
+**9. How many row groups are there, and how many are skipped by the filter `date >= '2100-01-01'`?**
+My file has 3 row groups. The filter skips all 3. The latest date in the file is in 2048, so no row group can match.
+
+**10. What if the orders were shuffled?**
+Each row group would contain dates from the whole period. No row group could be skipped. DuckDB would have to read all of them.
+
+**11. Compare the execution time of CSV and Parquet. What is due to the network, and what to the CSV parsing?**
+The CSV query took 1.24 s and the Parquet query 0.30 s. Parquet is about 4 times faster. For the network, CSV downloads 28.2 MiB, but Parquet only 203.5 KiB. For the parsing, DuckDB must read the CSV text and convert every value. Parquet columns are already typed and compressed.
