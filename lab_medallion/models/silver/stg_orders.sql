@@ -14,4 +14,5 @@ typed as (
 
 select *
 from typed
+-- Keep a single row per order, the most recent one if the source delivers duplicates
 qualify row_number() over (partition by order_id order by ordered_at desc) = 1
