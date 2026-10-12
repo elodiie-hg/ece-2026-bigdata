@@ -8,3 +8,7 @@ __pycache__/
 *.duckdb
 init.sql
 s3.env
+target/
+dbt_packages/
+logs/
+*.duckdb
