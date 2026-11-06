@@ -17,3 +17,4 @@ dbt_packages/
 logs/
 *.duckdb
 .polaris-credentials.env
+polaris/deployment/charts/
